@@ -1,98 +1,129 @@
-## ReadMe
+# Constitutional AI Fine-Tuning Pipeline (Vertex AI)
 
-fa25-google-dc/process-test-set.ipynb
-- This file processes the test set by adding prompts to determine whether each prompt is harmful (1) or not harmful (0)
+This repository contains the SAAS team's **Constitutional AI (CAI)** pipeline implementation. Using the framework established in Anthropic's research, we implemented and compared five different "Constitutions" to evaluate their effectiveness in mitigating harmful responses to red-team prompts.
 
-fa25-google-dc/process-outputs.ipynb
-- This file processes the inference outputs to detemine if each output (0) responded to the prompt or (1) rejected the prompt.
+## Project Overview
 
-All other csv and jsonl files left in the repository are outcomes of testing the scripts.
+We compared five distinct constitutions against a control (default Gemini 2.5-flash-lite) to determine which set of principles best steers model behavior toward safety without sacrificing utility.
 
+**The Five Constitutions:**
 
-# Gemini Fine-Tuning Pipeline (Vertex AI)
-
-This repository contains a complete data preparation, fine-tuning, and evaluation pipeline for **Gemini Supervised Fine-Tuning (SFT)** using **Vertex AI**. The pipeline covers dataset formatting, train/validation splitting, tuning job submission, and post-tuning evaluation.
-
----
-
-## Overview
-
-The pipeline performs the following steps:
-
-1. Convert raw CSV datasets into Gemini-compatible JSONL  
-2. Upload datasets to Google Cloud Storage (GCS)  
-3. Split data into training (90%) and validation (10%)  
-4. Launch a Vertex AI Gemini fine-tuning job  
-5. Evaluate the tuned model on held-out validation data  
-6. Upload evaluation results back to GCS  
+1. **Generic**
+2. **CSRM**
+3. **Environmental, Health, and Safety (EHS)**:
+4. **Audits**
+5. **Security**
 
 ---
 
-## Project Configuration
+## Repository Structure
 
-### Google Cloud
-- **Project ID**: `soy-surge-474318-q8`
-- **Region**: `us-central1`
-- **GCS Bucket**: `test_generic`
+```text
+fa25-google-dc/
+├── original_datasets/           # Raw red-team training and test sets
+├── vertex_ai_scripts/           # Scripts to run Critique/Revision on Vertex AI
+├── fine_tuning_datasets/        # Final revised prompt-response pairs per constitution
+├── gemini_fine_tuning.ipynb     # Main notebook for supervised fine-tuning (SFT) jobs
+├── original_inference_outputs/  # Batch inference results from all 6 models
+├── process-test-set.ipynb       # Labeling script for Ground Truth
+├── process-outputs.ipynb        # Labeling script for model rejections
+└── README.md
 
-### GCS Directory Structure
-gs://test_generic/
-├── train/ # Training JSONL files (90%)
-├── val/ # Validation JSONL files (10%)
-└── results/ # Evaluation outputs
-
----
-
-## Fine-Tuning Configuration
-
-### Tuning Method
-- **Type**: Supervised Fine-Tuning (SFT)
-- **Platform**: Vertex AI Gemini tuning API
-
-### Model Parameters
-- **Base model**: `base_model` (specified externally at runtime)
-- **Tuned model display name**: `audits_tuned_model_with_validation`
-- **Epoch count**: `10`
-
-> Learning rate, batch size, optimizer, and scheduler are managed internally by Vertex AI and are not user-configurable in the Gemini SFT API.
-
-### Training Dataset
-- **GCS URI**: `gs://test_generic/train/audits_train_formatted.jsonl`
-- **Format**: JSONL (Gemini SFT schema)
-- **Shuffle**: Enabled
-- **Random seed**: `42`
-
-### Validation Dataset
-- **GCS URI**: `gs://test_generic/val/audits_train_formatted_val.jsonl`
-- **Purpose**: Periodic evaluation during fine-tuning
+```
 
 ---
 
-## Dataset Split Parameters
+## The Constitutional AI Workflow
 
-- **Train / Validation split**: 90% / 10%
-- **Shuffling**: Enabled before splitting
-- **Validation filename suffix**: `_val.jsonl`
-- **Training files**: Overwrite originals in `train/`
+### 1. Data Preparation
+
+We compiled a dataset of red-team prompts, split into `train_full.csv` and `test_full.csv`. These are located in `original_datasets/`.
+
+### 2. Critique & Revision Pipeline
+
+Following Anthropic's original paper, we ran the training set through a three-step pipeline:
+
+1. **Initial Answer**: Model responds to red-team prompt.
+2. **Critique**: Model evaluates its response against a specific Constitution.
+3. **Revision**: Model rewrites the response to adhere to the Constitution.
+
+Because of the dataset's size (thousands of prompts), we utilized **Vertex AI** for this stage.
+
+* **How to run**: Upload `vertex_ai_scripts/` to the GCP Cloud Terminal.
+* **Execution**: Run `python run_pipeline.py`.
+* **Configuration**: Modify the `# ----- CONFIG -----` block in `run_pipeline.py` to match your Project ID, Bucket, and desired Constitution.
+
+### 3. Supervised Fine-Tuning (SFT)
+
+Once we generated the final revised responses (found in `fine_tuning_datasets/`), we fine-tuned **Gemini 2.5-flash-lite** five separate times—one for each constitution.
+
+* The fine-tuning logic is handled in `gemini_fine_tuning.ipynb`.
+* This converts the revised pairs into the required Gemini SFT JSONL format.
+
+### 4. Evaluation & Inference
+
+We ran the `test_full.jsonl` through 6 models: the 5 fine-tuned versions and 1 default Gemini (control).
+
+* Inference was performed using the **Vertex AI Batch Inference UI**.
+* The results are stored in `original_inference_outputs/`.
 
 ---
 
-## Data Format Requirements
+## Analysis & Labeling
+
+To evaluate the effectiveness of each constitution, we use an LLM-as-a-judge approach to label our data. This requires a two-step process for both the test prompts (Ground Truth) and the model responses (Inference).
+
+### 1. Preparing the Grading Prompts
+
+We use two notebooks to format our data into "grading requests" for the model:
+
+* **`process-test-set.ipynb`**: Takes the raw test set and appends a classification prompt to each entry. This asks the model to output `1` if the user prompt is harmful or `0` if it is harmless.
+* **`process-outputs.ipynb`**: Takes the 6 inference outputs and appends a classification prompt. This asks the model to output `1` if the fine-tuned model successfully rejected the prompt or `0` if it answered it.
+
+### 2. Executing Batch Inference (Labeling)
+
+Once the notebooks have generated these "grading" JSONL files, we run them through the **Vertex AI Batch Inference UI**:
+
+1. **Upload** the processed JSONL files to GCS.
+2. **Select** the base Gemini 2.5-flash-lite model to act as the judge.
+3. **Run Batch Inference** to get the actual labels (the 0s and 1s).
+
+### 3. Final Comparison
+
+The results of these labeling runs and confusion matrices are stored in the separate `saas-google-ml-analysis` repository. By comparing the **Ground Truth** (is the prompt actually bad?) against the **Model Output** (did the model reject it?), we generate **Confusion Matrices** for each of the 5 constitutions and the control model to measure safety precision and recall.
+
+---
+
+## Technical Configuration (Vertex AI)
+
+### Google Cloud Environment
+
+* **Project ID**: `your-project-id`
+* **Region**: `us-central1`
+* **GCS Bucket**: `gs://attack_prompts`
+* **Base Model**: `gemini-2.5-flash-lite`
+
+### Fine-Tuning Parameters
+
+* **Tuning Method**: Supervised Fine-Tuning (SFT)
+* **Train / Validation Split**: 90% / 10%
+* **Epochs**: 10
+* **Random Seed**: 42
 
 ### Gemini SFT JSONL Schema
 
-Each line in the dataset must follow this structure:
+Each line in the fine-tuning datasets follows this structure:
 
 ```json
 {
   "contents": [
     {
       "role": "user",
-      "parts": [{ "text": "<prompt>" }]
+      "parts": [{ "text": "<red_team_prompt>" }]
     },
     {
       "role": "model",
-      "parts": [{ "text": "<expected_response>" }]
+      "parts": [{ "text": "<final_revised_response>" }]
     }
   ]
 }

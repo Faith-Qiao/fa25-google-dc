@@ -10,7 +10,7 @@ from pipeline_components import split_csv_to_batches, process_batch, merge_resul
 PROJECT = "soy-surge-474318-q8" # CHANGE THIS to your project
 REGION = "us-central1"
 BUCKET = "gs://attack_prompts" # CHANGE THIS to your bucket name
-INPUT_PATH = f"{BUCKET}/input/generic_batch_0_1250.csv" # CHANGE THIS to your bucket path with the dataset
+INPUT_PATH = f"{BUCKET}/input/train_full.csv"
 BATCH_SIZE = 5000 # CHANGE THIS to your desired batch size
 PIPELINE_ROOT = f"{BUCKET}/pipeline_root"
 GENAI_MODEL = "gemini-2.5-flash-lite"
